@@ -1,9 +1,12 @@
 import csv
 import sklearn.linear_model as skl
+import sklearn.preprocessing as skp
+import sklearn.svm as svm
 import random
 import numpy as np
-
-
+import sys
+import io
+import math
 '''
 Takes in the path to the team data csv file and returns the features as an array
 '''
@@ -59,6 +62,31 @@ def readMatch_Data(path, team_data):
 
                 if not home or not away:
                     continue
+
+                # Create new feature for defensive score
+                if home[18] is not None and home[20] is not None:
+                    homeDefensiveScore = home[18] * home[20]
+                    home.append(homeDefensiveScore)
+                if away[18] is not None and away[20] is not None:
+                    awayDefensiveScore = away[18] * away[20]
+                    away.append(awayDefensiveScore)
+
+                # These features decreased our output score:
+
+                # # Create new feature for offensive score
+                # if home[11] is not None and home[13] is not None and home[15] is not None:
+                #     homeOffesiveScore = home[11] * home[13] * home[15]
+                #     home.append(homeOffesiveScore)
+                # if away[11] is not None and away[13] is not None and away[15] is not None:
+                #     awayOffesiveScore = away[11] * away[13] * away[15]
+                #     away.append(awayOffesiveScore)
+                #
+                # if home[4] is not None and home[8] is not None:
+                #     homeBuildUpScore = home[4] * home[8]
+                #     home.append(homeBuildUpScore)
+                # if away[4] is not None and away[8] is not None:
+                #     awayBuildUpScore = away[4] * away[8]
+                #     away.append(awayBuildUpScore)
 
                 for i in range(4, len(home)):
                     newRow.append(home[i])
@@ -144,17 +172,15 @@ def stringFeaturesToInts(team):
         elif feature in high:
             newRow.append(3.0)
         elif feature in off:
-            newRow.append(-1.0)
-        elif feature in on:
             newRow.append(1.0)
+        elif feature in on:
+            newRow.append(2.0)
         elif feature == '':
             newRow.append(0.0)
         else:
             newRow.append(float(feature))
 
     return newRow
-
-
 
 '''
 Normalizes features
@@ -166,42 +192,169 @@ def featureNormalize(X):
     return x_norm
 
 '''
-Generates a Y vector from an input X matrix
+Creates a Y vector by classifying a match as a home team win (1.0) home team loss (2.0) or tie (3.0)
 '''
-def y_from_x(x):
-    y = []
-    for game in x:
-        homeGoals = game[9]
-        y.append(homeGoals)
+def classifyMatch(home, away):
+    Y = []
 
-    return y
+    for i in range(len(home)):
+        if home[i] > away[i]:
+            Y.append(1.0)
+        elif away[i] > home[i]:
+            Y.append(2.0)
+        else:
+            Y.append(3.0)
+
+    return Y
+
 
 '''
-Runs stochastic gradient descent using SKLearn
+Trains and runs our linear regression model
 '''
-def learn(X):
+def linearRegression(data):
+    print('--------LINEAR REGRESSION OUTPUT--------\n')
+    training = data[0]
+    yHomeTraining = data[1]
+    yAwayTraining = data[2]
+
+    validation = data[3]
+    yHomeValidation = data[4]
+    yAwayValidation = data[5]
+
+    test = data[6]
+    yHomeTest = data[7]
+    yAwayTest = data[8]
+
+    homeModel = skl.SGDRegressor(max_iter=5000, tol=1e-3, alpha=0.001)
+    homeLearned = homeModel.fit(training, yHomeTraining)
+
+    awayModel = skl.SGDRegressor(max_iter=5000, tol=1e-3, alpha=0.001)
+    awayLearned = awayModel.fit(training, yAwayTraining)
+
+    homePredictTrain = homeModel.predict(training)
+    awayPredictTrain = awayModel.predict(training)
+
+    # homeScore = homeLearned.score(validation, yHomeValidation)
+    # print('Home goals linear Regression score: ' + str(homeScore))
+    # awayScore = awayLearned.score(validation, yAwayValidation)
+    # print('Away goals linear Regression score: ' + str(awayScore))
+
+    homeScore = homeLearned.score(test, yHomeTest)
+    print('Home goals linear Regression score: ' + str(homeScore))
+    awayScore = awayLearned.score(test, yAwayTest)
+    print('Away goals linear Regression score: ' + str(awayScore))
+
+    # homePredicted = homeLearned.predict(validation)
+    # awayPredicted = awayLearned.predict(validation)
+
+    homePredicted = homeLearned.predict(test)
+    awayPredicted = awayLearned.predict(test)
+
+
+    correct = 0
+    awayWins = 0
+    for i in range(len(homePredicted)):
+        if yHomeTest[i] > yAwayTest[i] and homePredicted[i] > awayPredicted[i]:
+            correct += 1
+        elif yHomeTest[i] < yAwayTest[i] and homePredicted[i] < awayPredicted[i]:
+            correct += 1
+            awayWins += 1
+
+    print('\n')
+    print('Linear regression accuracy: ' + str(correct/len(homePredicted)))
+    print('Percent that model pridicts away team winning: ' + str(awayWins/len(homePredicted)))
+    print('\n')
+
+    return (homePredictTrain, awayPredictTrain, homePredicted, awayPredicted)
+
+
+'''
+Trains and runs our SVM model
+'''
+def svmClassification(data, homePredicted=None, awayPredicted=None, homePredicted2=None, awayPredicted2=None):
+    print('--------SVM CLASSIFICATION OUTPUT--------\n')
+
+    training = data[0]
+    yHomeTraining = data[1]
+    yAwayTraining = data[2]
+
+    validation = data[3]
+    yHomeValidation = data[4]
+    yAwayValidation = data[5]
+
+    test = data[6]
+    yHomeTest = data[7]
+    yAwayTest = data[8]
+
+
+    # Adds linear regression predicted output as features
+    if homePredicted is not None and awayPredicted is not None:
+        for i in range(len(homePredicted)):
+            np.append(training[i], homePredicted[i])
+            np.append(training[i], awayPredicted[i])
+
+    if homePredicted2 is not None and awayPredicted2 is not None:
+        for i in range(len(homePredicted2)):
+            np.append(test[i], homePredicted2[i])
+            np.append(test[i], awayPredicted2[i])
+
+    classificationModel = svm.SVC(gamma='auto', C=1000.0, kernel='sigmoid')
+
+    yClassTraining = classifyMatch(yHomeTraining, yAwayTraining)
+    svmLearned = classificationModel.fit(training, yClassTraining)
+
+    # yClassValidation = classifyMatch(yHomeValidation, yAwayValidation)
+
+    yClassTest = classifyMatch(yHomeTest, yAwayTest)
+
+    print('Classifcation score: ' + str(svmLearned.score(test, yClassTest)))
+
+    # predicted = svmLearned.predict(validation)
+
+    predicted = svmLearned.predict(test)
+
+    awayWins = 0
+    for outcome in predicted:
+        if outcome == 2.0:
+            awayWins += 1
+
+    print('Percent that model pridicts away team winning: ' + str(awayWins / len(predicted)))
+
+'''
+Creates training and validation sets
+'''
+def preProcessing(X):
     shuffledX = random.sample(X, len(X))
 
-    training = featureNormalize(shuffledX[:16000])
-    y = y_from_x(training)
+    yHome = []
+    yAway = []
+    newX = []
+    for match in shuffledX:
+        yHome.append(match[0])
+        yAway.append(match[1])
+        newX.append(match[2:])
 
-    validation = shuffledX[16001:]
-    validation_y = y_from_x(validation)
+    # training = featureNormalize(newX[:16000])
+    training = skp.normalize(newX[:16000])
+    yHomeTraining = yHome[:16000]
+    yAwayTraining = yAway[:16000]
 
-    model = skl.SGDRegressor(max_iter=5000, tol=1e-3, alpha=0.0001)
+    # validation = featureNormalize(newX[16001:20000])
+    validation = skp.normalize(newX[16001:20000])
+    yHomeValidation = yHome[16001:20000]
+    yAwayValidation = yAway[16001:20000]
 
-    learned = model.fit(training, y)
+    test = skp.normalize(newX[20000:])
+    yHomeTest = yHome[20000:]
+    yAwayTest = yAway[20000:]
 
-    score = learned.score(validation, validation_y)
-
-    print(score)
-
-    # predicted = learned.predict(validation)
-    # for val in predicted:
-    #     print(val)
+    return (training, yHomeTraining, yAwayTraining, validation, yHomeValidation, yAwayValidation, test, yHomeTest, yAwayTest)
 
 
 teamData = readTeam_Data('Team_Attributes.csv')[0]
 X = readMatch_Data('Match_Data.csv', teamData)[0]
 
-learn(X)
+data = preProcessing(X)
+
+(homePredicted1, awayPredicted1, homePredicted2, awayPredicted2) = linearRegression(data)
+svmClassification(data, homePredicted1, awayPredicted1, homePredicted2, awayPredicted2)
